@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/examples/python/.venv/bin/python",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/examples/python/.venv/lib/python*/site-packages"
+  ]
+}
+
