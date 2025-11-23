@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 echo "Building toy-hashgraph-js WASM package..."
 cd "$PROJECT_ROOT/toy-hashgraph-js"
-wasm-pack build --target bundler
+wasm-pack build --target bundler --out-name toy_hashgraph
 
 echo "Installing dependencies..."
 cd "$SCRIPT_DIR"

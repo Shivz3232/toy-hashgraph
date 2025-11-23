@@ -1,5 +1,5 @@
 <script>
-  import { add } from "toy-hashgraph-js";
+  import { add } from "toy-hashgraph";
 
   let a = $state(5);
   let b = $state(7);

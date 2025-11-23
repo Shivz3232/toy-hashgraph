@@ -5,7 +5,7 @@
     "module": "ESNext",
     "baseUrl": ".",
     "paths": {
-      "toy-hashgraph-js": ["../toy-hashgraph-js/pkg/toy_hashgraph_js.d.ts"]
+      "toy-hashgraph": ["../toy-hashgraph-js/pkg/toy_hashgraph.d.ts"]
     },
     /**
      * svelte-preprocess cannot figure out whether you have

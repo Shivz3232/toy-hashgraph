@@ -6,6 +6,7 @@ fn add(a: i32, b: i32) -> i32 {
 }
 
 #[pymodule]
+#[pyo3(name = "toy_hashgraph")]
 fn toy_hashgraph_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(add, m)?)?;
     Ok(())

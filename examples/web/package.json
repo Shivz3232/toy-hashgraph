@@ -20,6 +20,6 @@
     "vite-plugin-wasm": "^3.5.0"
   },
   "dependencies": {
-    "toy-hashgraph-js": "file:../../toy-hashgraph-js/pkg"
+    "toy-hashgraph": "file:../../toy-hashgraph-js/pkg"
   }
 }
