@@ -26,4 +26,4 @@ maturin develop
 
 echo "Running Python example..."
 cd "$SCRIPT_DIR"
-python main.py
+python src/main.py

@@ -70,7 +70,7 @@ def run_simulation(hashgraphs: dict, peers: list):
             
             # Receiver processes the message with deterministic timestamp
             event_timestamp_ms = base_timestamp_ms + int(simulated_time * 1000)
-            hashgraphs[receiver].recieve(data, event_timestamp_ms)
+            hashgraphs[receiver].receive(data, event_timestamp_ms)
             
             simulation_events.append({
                 'type': 'gossip',

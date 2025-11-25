@@ -1,6 +1,7 @@
 """Hashgraph visualization utilities."""
 
 import json
+import os
 import matplotlib.pyplot as plt
 import config
 
@@ -25,7 +26,7 @@ def get_event_peer(graph: dict, event_hash: str) -> int:
             current_hash = event["self_parent"]
 
 
-def plot_hashgraph(state: dict, title: str, ax):
+def plot_hashgraph(state: dict, title: str, ax, all_peers=None):
     """
     Plot a hashgraph on the given axes.
     
@@ -33,31 +34,38 @@ def plot_hashgraph(state: dict, title: str, ax):
         state: Hashgraph state dictionary
         title: Title for the plot
         ax: Matplotlib axes to plot on
+        all_peers: Optional list of all peer IDs to show lanes for (even if no events)
     """
     graph = state["graph"]
     
     # Get all unique peers by looking at initial events
-    peer_ids = sorted(set(
-        event["peer"] for event in graph.values() if event["kind"] == "initial"
-    ))
+    if all_peers is not None:
+        peer_ids = sorted(all_peers)
+    else:
+        peer_ids = sorted(set(
+            event["peer"] for event in graph.values() if event["kind"] == "initial"
+        ))
     peer_names = [f"Peer {p}" for p in peer_ids]
     peer_x = {peer: i * 2 for i, peer in enumerate(peer_ids)}
     
-    # Sort events by timestamp, then by peer ID for consistent ordering
-    events_sorted = sorted(
-        [(h, e) for h, e in graph.items()],
-        key=lambda x: (x[1]["timestamp"], get_event_peer(graph, x[0]))
-    )
+    # Get min timestamp to normalize all events to start from 0
+    if graph:
+        min_timestamp = min(e["timestamp"] for e in graph.values())
+    else:
+        min_timestamp = 0
     
-    # Assign y positions based on timestamp order
+    # Assign y positions based on actual timestamp (normalized to start from 0)
     event_positions = {}
-    for y_pos, (event_hash, event) in enumerate(events_sorted):
+    max_y = 0
+    for event_hash, event in graph.items():
         peer = get_event_peer(graph, event_hash)
         x = peer_x[peer]
-        event_positions[event_hash] = (x, y_pos)
+        # Convert timestamp to relative time (in seconds)
+        y = (event["timestamp"] - min_timestamp) / 1000.0
+        event_positions[event_hash] = (x, y)
+        max_y = max(max_y, y)
     
     # Draw peer lanes (dashed vertical lines)
-    max_y = len(events_sorted)
     for peer, x in peer_x.items():
         ax.axvline(x, color='gray', linestyle='--', alpha=0.3, zorder=0)
     
@@ -76,27 +84,31 @@ def plot_hashgraph(state: dict, title: str, ax):
                 x2, y2 = event_positions[event["other_parent"]]
                 ax.plot([x1, x2], [y1, y2], 'k-', linewidth=1, zorder=1)
     
-    # Draw events as circles
+    # Draw events as circles using scatter (maintains circular shape)
     for event_hash, (x, y) in event_positions.items():
-        event = graph[event_hash]
-        color = 'lightblue' if event["kind"] == "initial" else 'white'
-        circle = plt.Circle((x, y), 0.3, fill=True, facecolor=color, 
-                            edgecolor='black', linewidth=1.5, zorder=2)
-        ax.add_patch(circle)
+        ax.scatter(x, y, s=400, c='white', edgecolors='black', 
+                  linewidths=1.5, zorder=2, marker='o')
         
-        # Label with short hash
+        # Label with short hash in monospace font
         short_hash = event_hash[:4]
-        ax.text(x, y, short_hash, ha='center', va='center', fontsize=7, zorder=4)
+        ax.text(x, y, short_hash, ha='center', va='center', fontsize=7, 
+               fontfamily='monospace', zorder=4)
     
     # Add peer labels at top
+    y_offset = max(0.05, max_y * 0.05)  # 5% of time range or minimum 0.05s
     for peer, x in peer_x.items():
-        ax.text(x, max_y + 0.5, f"Peer {peer}", ha='center', va='bottom', fontsize=10, fontweight='bold')
+        ax.text(x, max_y + y_offset, f"Peer {peer}", ha='center', va='bottom', fontsize=10, fontweight='bold')
     
     ax.set_xlim(-1, max(peer_x.values()) + 1)
-    ax.set_ylim(-1, max_y + 1.5)
-    ax.set_aspect('equal')
-    ax.axis('off')
+    y_margin = max(0.05, max_y * 0.1)  # 10% margin or minimum 0.05s
+    ax.set_ylim(-y_margin, max_y + y_margin * 2)
+    ax.set_ylabel('Time (seconds)', fontsize=10)
     ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+    ax.set_xticks([])
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    ax.grid(True, axis='y', alpha=0.2, linestyle='-', linewidth=0.5)
 
 
 def plot_ground_truth(simulation_events: list, peers: list, ax):
@@ -190,6 +202,31 @@ def plot_ground_truth(simulation_events: list, peers: list, ax):
     ax.spines['bottom'].set_visible(False)
 
 
+def merge_all_graphs(hashgraphs: dict, peers: list) -> dict:
+    """
+    Merge all peer hashgraphs into a single global graph.
+    
+    Args:
+        hashgraphs: Dictionary mapping peer_id to Hashgraph instance
+        peers: List of peer IDs
+        
+    Returns:
+        Merged state dictionary with all unique events
+    """
+    merged_graph = {}
+    
+    for peer in peers:
+        state = json.loads(hashgraphs[peer].as_json())
+        graph = state["graph"]
+        
+        # Add all events from this peer's view
+        for event_hash, event in graph.items():
+            if event_hash not in merged_graph:
+                merged_graph[event_hash] = event
+    
+    return {"graph": merged_graph}
+
+
 def visualize_hashgraphs(hashgraphs: dict, peers: list, simulation_events: list = None):
     """
     Create and save visualization of all peer hashgraphs.
@@ -199,6 +236,9 @@ def visualize_hashgraphs(hashgraphs: dict, peers: list, simulation_events: list 
         peers: List of peer IDs
         simulation_events: Optional list of simulation events for ground truth plot
     """
+    # Create output directory if it doesn't exist
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    
     # Save timeline separately if available
     if simulation_events:
         fig_timeline = plt.figure(figsize=(8, 6))
@@ -209,6 +249,16 @@ def visualize_hashgraphs(hashgraphs: dict, peers: list, simulation_events: list 
         print(f"Saved timeline to {config.TIMELINE_FILENAME}")
         plt.close(fig_timeline)
     
+    # Create merged graph from all peer views
+    merged_state = merge_all_graphs(hashgraphs, peers)
+    fig_merged = plt.figure(figsize=(10, 8))
+    ax_merged = fig_merged.add_subplot(111)
+    plot_hashgraph(merged_state, f"Merged Graph ({len(merged_state['graph'])} events)", ax_merged, all_peers=peers)
+    plt.tight_layout()
+    plt.savefig(config.MERGED_GRAPH_FILENAME, dpi=config.DPI, bbox_inches='tight')
+    print(f"Saved merged graph to {config.MERGED_GRAPH_FILENAME}")
+    plt.close(fig_merged)
+    
     # Create a 2x2 grid for peer views
     num_peers = len(peers)
     rows = 2
@@ -217,11 +267,11 @@ def visualize_hashgraphs(hashgraphs: dict, peers: list, simulation_events: list 
     fig, axes = plt.subplots(rows, cols, figsize=(12, 12))
     axes = axes.flatten()  # Flatten to 1D array for easy indexing
 
-    # Plot each peer's view
+    # Plot each peer's view (showing all peer lanes)
     for i, peer in enumerate(peers):
         if i < len(axes):
             state = json.loads(hashgraphs[peer].as_json())
-            plot_hashgraph(state, f"Peer {peer}'s View ({len(state['graph'])} events)", axes[i])
+            plot_hashgraph(state, f"Peer {peer}'s View ({len(state['graph'])} events)", axes[i], all_peers=peers)
     
     # Hide any unused subplots
     for i in range(num_peers, len(axes)):

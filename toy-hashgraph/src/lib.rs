@@ -58,7 +58,7 @@ impl Hashgraph {
         buffer
     }
 
-    pub fn recieve(&mut self, data: &[u8], timestamp: u64) {
+    pub fn receive(&mut self, data: &[u8], timestamp: u64) {
         let sender_end = 8;
         let signature_end = 8 + common::SIGNATURE_SIZE;
 
@@ -92,10 +92,10 @@ impl Hashgraph {
 
         let events = event::Event::events_from_bytes(&data);
 
-        self.recieve_inner(sender, events, timestamp);
+        self.receive_inner(sender, events, timestamp);
     }
 
-    fn recieve_inner(&mut self, sender: u64, events: Vec<event::Event>, timestamp: u64) {
+    fn receive_inner(&mut self, sender: u64, events: Vec<event::Event>, timestamp: u64) {
         self.graph.update(events);
 
         let mut transactions = Vec::new();

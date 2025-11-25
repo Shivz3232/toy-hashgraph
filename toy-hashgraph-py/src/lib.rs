@@ -60,8 +60,8 @@ impl Hashgraph {
     }
 
     #[pyo3(text_signature = "(data: bytes, timestamp: int) -> None")]
-    fn recieve(&mut self, data: &[u8], timestamp: u64) {
-        self.inner.recieve(data, timestamp);
+    fn receive(&mut self, data: &[u8], timestamp: u64) {
+        self.inner.receive(data, timestamp);
     }
 
     #[pyo3(text_signature = "() -> str")]

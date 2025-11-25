@@ -9,7 +9,9 @@ LOOP_SLEEP_SECONDS = 0.005
 RANDOM_SEED = 0  # For reproducible simulation
 
 # Visualization
-PEER_VIEWS_FILENAME = "hashgraph_peer_views.png"
-TIMELINE_FILENAME = "hashgraph_timeline.png"
+OUTPUT_DIR = "images"
+PEER_VIEWS_FILENAME = "images/hashgraph_peer_views.png"
+TIMELINE_FILENAME = "images/hashgraph_timeline.png"
+MERGED_GRAPH_FILENAME = "images/hashgraph_merged.png"
 DPI = 150
 
