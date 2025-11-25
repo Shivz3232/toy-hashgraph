@@ -1,7 +1,6 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}/examples/python/.venv/bin/python",
-  "python.analysis.extraPaths": [
-    "${workspaceFolder}/examples/python/.venv/lib/python*/site-packages"
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "cursorpyright.analysis.extraPaths": [
+    "${workspaceFolder}/.venv/lib/python*/site-packages"
   ]
 }
-
