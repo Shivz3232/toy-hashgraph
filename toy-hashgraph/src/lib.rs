@@ -1,17 +1,19 @@
-mod common;
-mod event;
-mod graph;
+pub mod common;
+pub mod event;
+pub mod graph;
 
 use std::collections::HashMap;
 
 use ed25519_dalek::{self, ed25519::signature::SignerMut};
 
+use crate::event::EventTrait;
+
 pub struct Hashgraph {
-    id: u64,
-    transactions: Vec<u8>,
-    graph: graph::Graph,
-    signer: ed25519_dalek::SigningKey,
-    verifiers: HashMap<u64, ed25519_dalek::VerifyingKey>,
+    pub id: u64,
+    pub graph: graph::Graph,
+    pub pending_transactions: Vec<u8>,
+    pub signer: ed25519_dalek::SigningKey,
+    pub verifiers: HashMap<u64, ed25519_dalek::VerifyingKey>,
 }
 
 impl Hashgraph {
@@ -23,8 +25,8 @@ impl Hashgraph {
     ) -> Hashgraph {
         Hashgraph {
             id,
-            transactions: Vec::new(),
-            graph: graph::Graph::new(id, timestamp),
+            graph: graph::Graph::new(id, timestamp, public_keys.len() as u64),
+            pending_transactions: Vec::new(),
             signer: ed25519_dalek::SigningKey::from_bytes(&private_key),
             verifiers: public_keys
                 .into_iter()
@@ -40,7 +42,7 @@ impl Hashgraph {
     }
 
     pub fn append_transaction(&mut self, transaction: &[u8]) {
-        self.transactions.extend_from_slice(transaction);
+        self.pending_transactions.extend_from_slice(transaction);
     }
 
     pub fn send(&mut self) -> Vec<u8> {
@@ -99,23 +101,23 @@ impl Hashgraph {
         self.graph.update(events);
 
         let mut transactions = Vec::new();
-        transactions.append(&mut self.transactions);
+        transactions.append(&mut self.pending_transactions);
 
         let self_parent = self
             .graph
-            .latest_event_by_peer(self.id)
+            .latest_event(self.id)
             .expect("at least the initial event should be present");
         let other_parent = self
             .graph
-            .latest_event_by_peer(sender)
+            .latest_event(sender)
             .expect("at least the initial event should be present");
 
         self.graph
             .insert_event(event::Event::Default(event::Default::new(
                 timestamp,
                 transactions,
-                *self_parent.0,
-                *other_parent.0,
+                self_parent.hash(),
+                other_parent.hash(),
             )));
     }
 
@@ -123,7 +125,7 @@ impl Hashgraph {
         format!(
             r#"{{"id":{},"transactions":"{}","graph":{}}}"#,
             self.id,
-            common::bytes_to_hex(&self.transactions),
+            common::bytes_to_hex(&self.pending_transactions),
             self.graph.as_json()
         )
     }

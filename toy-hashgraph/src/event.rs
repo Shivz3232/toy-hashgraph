@@ -22,6 +22,8 @@ pub trait EventTrait {
     }
 
     fn timestamp(&self) -> u64;
+
+    fn as_json(&self) -> String;
 }
 
 pub enum Event {
@@ -69,6 +71,13 @@ impl EventTrait for Event {
         match self {
             Event::Initial(initial) => initial.timestamp(),
             Event::Default(default) => default.timestamp(),
+        }
+    }
+
+    fn as_json(&self) -> String {
+        match self {
+            Event::Initial(initial) => initial.as_json(),
+            Event::Default(default) => default.as_json(),
         }
     }
 }
@@ -127,6 +136,13 @@ impl EventTrait for Initial {
 
     fn timestamp(&self) -> u64 {
         self.timestamp
+    }
+
+    fn as_json(&self) -> String {
+        format!(
+            r#"{{"kind":"initial","timestamp":{},"peer":{}}}"#,
+            self.timestamp, self.peer
+        )
     }
 }
 
@@ -217,5 +233,15 @@ impl EventTrait for Default {
 
     fn timestamp(&self) -> u64 {
         self.timestamp
+    }
+
+    fn as_json(&self) -> String {
+        format!(
+            r#"{{"kind":"default","timestamp":{},"transactions":"{}","self_parent":"{}","other_parent":"{}"}}"#,
+            self.timestamp,
+            common::bytes_to_hex(&self.transactions),
+            common::bytes_to_hex(&self.self_parent),
+            common::bytes_to_hex(&self.other_parent)
+        )
     }
 }

@@ -24,7 +24,6 @@ echo "Building toy-hashgraph-py..."
 cd "$PROJECT_ROOT/toy-hashgraph-py"
 maturin develop
 
-echo "Running Python tests..."
+echo "Running Python example..."
 cd "$SCRIPT_DIR"
-python src/test_graph.py
-
+python src/main.py
