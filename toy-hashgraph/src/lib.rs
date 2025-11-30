@@ -25,7 +25,7 @@ impl Hashgraph {
     ) -> Hashgraph {
         Hashgraph {
             id,
-            graph: graph::Graph::new(id, timestamp, public_keys.len() as u64),
+            graph: graph::Graph::new(id, timestamp, public_keys.len()),
             pending_transactions: Vec::new(),
             signer: ed25519_dalek::SigningKey::from_bytes(&private_key),
             verifiers: public_keys

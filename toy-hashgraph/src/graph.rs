@@ -1,4 +1,4 @@
-use std::collections;
+use std::{cmp, collections};
 
 use crate::{
     common,
@@ -6,12 +6,12 @@ use crate::{
 };
 
 pub struct Graph {
-    total_peers: u64,
+    total_peers: usize,
     events: collections::HashMap<common::Hash, event::Event>,
 }
 
 impl Graph {
-    pub fn new(id: u64, timestamp: u64, total_peers: u64) -> Graph {
+    pub fn new(id: u64, timestamp: u64, total_peers: usize) -> Graph {
         let initial_event = event::Event::Initial(event::Initial::new(id, timestamp));
         let mut events = collections::HashMap::new();
         events.insert(initial_event.hash(), initial_event);
@@ -33,7 +33,7 @@ impl Graph {
         format!("{{{}}}", entries.join(","))
     }
 
-    pub fn is_supermajority(&self, count: u64) -> bool {
+    pub fn is_supermajority(&self, count: usize) -> bool {
         3 * count > 2 * self.total_peers
     }
 
@@ -168,7 +168,7 @@ impl Graph {
             .map(|z| self.creator(z))
             .collect::<collections::HashSet<_>>();
 
-        return self.is_supermajority(events.len() as u64);
+        return self.is_supermajority(events.len());
     }
 
     pub fn round(&self, event_hash: &common::Hash) -> u64 {
@@ -189,7 +189,7 @@ impl Graph {
                     .map(|e| self.creator(e))
                     .collect::<collections::HashSet<_>>();
 
-                if self.is_supermajority(base_round_event_peers.len() as u64) {
+                if self.is_supermajority(base_round_event_peers.len()) {
                     i + 1
                 } else {
                     i
@@ -210,6 +210,153 @@ impl Graph {
             })
             .map(|e| e.clone())
             .collect::<Vec<_>>()
+    }
+
+    fn is_famous(&self, candidate: &common::Hash) -> bool {
+        let mut round = self.round(&candidate) + 1;
+        let mut previous_voters = self.witnesses(round);
+        let mut previous_votes = previous_voters
+            .iter()
+            .map(|voter| self.is_strict_ancestor(&candidate, voter))
+            .collect::<Vec<_>>();
+
+        loop {
+            round += 1;
+            let voters = self.witnesses(round);
+            if voters.len() == 0 {
+                return false; // Should lead to coin round but I'm not implementing that
+            }
+            let mut votes = Vec::new();
+
+            for voter in voters.iter() {
+                let observed_votes = previous_voters
+                    .iter()
+                    .zip(previous_votes.iter())
+                    .filter(|(previous_voter, _)| self.strongly_sees(previous_voter, voter))
+                    .map(|(_, pv)| pv);
+
+                let yes_count = observed_votes.clone().filter(|v| **v).count();
+                let no_count = observed_votes.clone().filter(|v| !*v).count();
+
+                if self.is_supermajority(yes_count) {
+                    return true;
+                }
+
+                if self.is_supermajority(no_count) {
+                    return false;
+                }
+
+                votes.push(yes_count >= no_count);
+            }
+
+            previous_voters = voters;
+            previous_votes = votes;
+        }
+    }
+
+    pub fn famous_witnesses(&self, round: u64) -> Vec<common::Hash> {
+        self.witnesses(round)
+            .into_iter()
+            .filter(|w| self.is_famous(w))
+            .collect::<Vec<_>>()
+    }
+
+    pub fn unique_famous_witnesses(&self, round: u64) -> Vec<common::Hash> {
+        let mut map = collections::HashMap::new();
+        for famous_witness in self.famous_witnesses(round) {
+            let peer = self.creator(&famous_witness);
+
+            if !map.contains_key(&peer) {
+                map.insert(peer, Vec::new());
+            }
+
+            map.get_mut(&peer)
+                .expect("i just inserted it")
+                .push(famous_witness);
+        }
+
+        map.into_values()
+            .map(|ufw_vec| {
+                ufw_vec
+                    .into_iter()
+                    .min()
+                    .expect("there should at least be one or the entry would not exist")
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub fn round_received(&self, event_hash: &common::Hash) -> Option<u64> {
+        let mut round = self.round(event_hash);
+
+        loop {
+            let unique_famous_witnesses = self.unique_famous_witnesses(round);
+
+            if unique_famous_witnesses.len() == 0 {
+                return None;
+            }
+
+            if unique_famous_witnesses
+                .iter()
+                .all(|famous_witness| self.is_ancestor(event_hash, famous_witness))
+            {
+                return Some(round);
+            }
+            round += 1
+        }
+    }
+
+    pub fn consensus_timestamp(&self, event_hash: &common::Hash) -> Option<u64> {
+        let round = self.round_received(event_hash)?;
+
+        let mut timestamps = self
+            .unique_famous_witnesses(round)
+            .into_iter()
+            .map(|witness| {
+                let mut current = witness;
+                let mut last_with_x = None;
+
+                loop {
+                    if self.is_ancestor(event_hash, &current) {
+                        last_with_x = Some(current);
+                    }
+
+                    match self.get_event(&current) {
+                        event::Event::Initial(_) => {
+                            let z = last_with_x.unwrap_or(current);
+                            return self.get_event(&z).timestamp();
+                        }
+                        event::Event::Default(ev) => {
+                            if !self.is_ancestor(event_hash, &current) && last_with_x.is_some() {
+                                let z = last_with_x.unwrap();
+                                return self.get_event(&z).timestamp();
+                            }
+                            current = ev.self_parent;
+                        }
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        timestamps.sort();
+
+        Some(
+            *timestamps
+                .get((timestamps.len() - 1) / 2)
+                .expect("there should at least be one candidate timestamp"),
+        )
+    }
+
+    pub fn consensus_ordering(&self, a: common::Hash, b: common::Hash) -> Option<cmp::Ordering> {
+        let a_round = self.round_received(&a)?;
+        let b_round = self.round_received(&b)?;
+        let a_time = self.consensus_timestamp(&a)?;
+        let b_time = self.consensus_timestamp(&b)?;
+
+        Some(
+            a_round
+                .cmp(&b_round)
+                .then(a_time.cmp(&b_time))
+                .then(a.cmp(&b)),
+        )
     }
 }
 

@@ -185,7 +185,7 @@ impl GraphQuerier {
     /// Returns:
     ///     True if count > (2/3 * total_peers).
     #[pyo3(text_signature = "(count: int) -> bool")]
-    fn is_supermajority(&self, py: Python<'_>, count: u64) -> bool {
+    fn is_supermajority(&self, py: Python<'_>, count: usize) -> bool {
         self.parent.borrow(py).inner.graph.is_supermajority(count)
     }
 
@@ -217,12 +217,12 @@ impl GraphQuerier {
     /// Get an event by its hash.
     ///
     /// Args:
-    ///     event_hash: The SHA-256 hash of the event (32 bytes).
+    ///     event_hash: The SHA-256 hash of the event (32 bytes or 64-char hex string).
     ///
     /// Returns:
     ///     The event as a JSON string.
-    #[pyo3(text_signature = "(event_hash: bytes) -> str")]
-    fn get_event(&self, py: Python<'_>, event_hash: &[u8]) -> PyResult<String> {
+    #[pyo3(text_signature = "(event_hash: bytes | str) -> str")]
+    fn get_event(&self, py: Python<'_>, event_hash: &Bound<'_, PyAny>) -> PyResult<String> {
         let hash = extract_hash(event_hash)?;
         let binding = self.parent.borrow(py);
         let event = binding.inner.graph.get_event(&hash);
@@ -234,12 +234,12 @@ impl GraphQuerier {
     /// This follows the self-parent chain back to the initial event.
     ///
     /// Args:
-    ///     event_hash: The SHA-256 hash of the event (32 bytes).
+    ///     event_hash: The SHA-256 hash of the event (32 bytes or 64-char hex string).
     ///
     /// Returns:
     ///     The peer ID of the event's creator.
-    #[pyo3(text_signature = "(event_hash: bytes) -> int")]
-    fn creator(&self, py: Python<'_>, event_hash: &[u8]) -> PyResult<u64> {
+    #[pyo3(text_signature = "(event_hash: bytes | str) -> int")]
+    fn creator(&self, py: Python<'_>, event_hash: &Bound<'_, PyAny>) -> PyResult<u64> {
         let hash = extract_hash(event_hash)?;
         Ok(self.parent.borrow(py).inner.graph.creator(&hash))
     }
@@ -250,13 +250,18 @@ impl GraphQuerier {
     /// parent references. Every event is an ancestor of itself.
     ///
     /// Args:
-    ///     x: Hash of the potential ancestor event (32 bytes).
-    ///     y: Hash of the potential descendant event (32 bytes).
+    ///     x: Hash of the potential ancestor event (32 bytes or 64-char hex string).
+    ///     y: Hash of the potential descendant event (32 bytes or 64-char hex string).
     ///
     /// Returns:
     ///     True if x is an ancestor of y (including x == y).
-    #[pyo3(text_signature = "(x: bytes, y: bytes) -> bool")]
-    fn is_ancestor(&self, py: Python<'_>, x: &[u8], y: &[u8]) -> PyResult<bool> {
+    #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
+    fn is_ancestor(
+        &self,
+        py: Python<'_>,
+        x: &Bound<'_, PyAny>,
+        y: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self
@@ -270,8 +275,13 @@ impl GraphQuerier {
     /// Check if event x is a strict ancestor of event y (x < y).
     ///
     /// Same as is_ancestor but excludes the case where x == y.
-    #[pyo3(text_signature = "(x: bytes, y: bytes) -> bool")]
-    fn is_strict_ancestor(&self, py: Python<'_>, x: &[u8], y: &[u8]) -> PyResult<bool> {
+    #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
+    fn is_strict_ancestor(
+        &self,
+        py: Python<'_>,
+        x: &Bound<'_, PyAny>,
+        y: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self
@@ -286,8 +296,13 @@ impl GraphQuerier {
     ///
     /// A self-ancestor relationship follows only the self-parent chain,
     /// meaning both events were created by the same peer.
-    #[pyo3(text_signature = "(x: bytes, y: bytes) -> bool")]
-    fn is_self_ancestor(&self, py: Python<'_>, x: &[u8], y: &[u8]) -> PyResult<bool> {
+    #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
+    fn is_self_ancestor(
+        &self,
+        py: Python<'_>,
+        x: &Bound<'_, PyAny>,
+        y: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self
@@ -301,8 +316,13 @@ impl GraphQuerier {
     /// Check if event x is a strict self-ancestor of event y (x ⊏ y).
     ///
     /// Same as is_self_ancestor but excludes the case where x == y.
-    #[pyo3(text_signature = "(x: bytes, y: bytes) -> bool")]
-    fn is_strict_self_ancestor(&self, py: Python<'_>, x: &[u8], y: &[u8]) -> PyResult<bool> {
+    #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
+    fn is_strict_self_ancestor(
+        &self,
+        py: Python<'_>,
+        x: &Bound<'_, PyAny>,
+        y: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self
@@ -317,8 +337,13 @@ impl GraphQuerier {
     ///
     /// A fork occurs when two events from the same creator are not
     /// in a self-ancestor relationship with each other.
-    #[pyo3(text_signature = "(x: bytes, y: bytes) -> bool")]
-    fn is_fork(&self, py: Python<'_>, x: &[u8], y: &[u8]) -> PyResult<bool> {
+    #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
+    fn is_fork(
+        &self,
+        py: Python<'_>,
+        x: &Bound<'_, PyAny>,
+        y: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self.parent.borrow(py).inner.graph.is_fork(&x_hash, &y_hash))
@@ -328,8 +353,13 @@ impl GraphQuerier {
     ///
     /// An event can see dishonesty if it has visibility to a fork
     /// created by the specified peer.
-    #[pyo3(text_signature = "(event_hash: bytes, peer: int) -> bool")]
-    fn can_see_dishonesty(&self, py: Python<'_>, event_hash: &[u8], peer: u64) -> PyResult<bool> {
+    #[pyo3(text_signature = "(event_hash: bytes | str, peer: int) -> bool")]
+    fn can_see_dishonesty(
+        &self,
+        py: Python<'_>,
+        event_hash: &Bound<'_, PyAny>,
+        peer: u64,
+    ) -> PyResult<bool> {
         let hash = extract_hash(event_hash)?;
         Ok(self
             .parent
@@ -343,8 +373,8 @@ impl GraphQuerier {
     ///
     /// Event y sees event x if x is an ancestor of y and y cannot
     /// see any dishonesty by the creator of x.
-    #[pyo3(text_signature = "(x: bytes, y: bytes) -> bool")]
-    fn sees(&self, py: Python<'_>, x: &[u8], y: &[u8]) -> PyResult<bool> {
+    #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
+    fn sees(&self, py: Python<'_>, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self.parent.borrow(py).inner.graph.sees(&x_hash, &y_hash))
@@ -354,8 +384,13 @@ impl GraphQuerier {
     ///
     /// Event y strongly sees event x if there is a supermajority of
     /// peers whose events are ancestors of y and see x.
-    #[pyo3(text_signature = "(x: bytes, y: bytes) -> bool")]
-    fn strongly_sees(&self, py: Python<'_>, x: &[u8], y: &[u8]) -> PyResult<bool> {
+    #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
+    fn strongly_sees(
+        &self,
+        py: Python<'_>,
+        x: &Bound<'_, PyAny>,
+        y: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self
@@ -370,8 +405,8 @@ impl GraphQuerier {
     ///
     /// Initial events are in round 0. Other events advance to round r+1
     /// if they can strongly see a supermajority of round r witnesses.
-    #[pyo3(text_signature = "(event_hash: bytes) -> int")]
-    fn round(&self, py: Python<'_>, event_hash: &[u8]) -> PyResult<u64> {
+    #[pyo3(text_signature = "(event_hash: bytes | str) -> int")]
+    fn round(&self, py: Python<'_>, event_hash: &Bound<'_, PyAny>) -> PyResult<u64> {
         let hash = extract_hash(event_hash)?;
         Ok(self.parent.borrow(py).inner.graph.round(&hash))
     }
@@ -394,17 +429,154 @@ impl GraphQuerier {
             .map(|hash| hash.to_vec())
             .collect()
     }
+
+    /// Get all famous witness events for a specific round.
+    ///
+    /// A famous witness is a witness that has been decided as famous
+    /// through the voting process.
+    ///
+    /// Returns:
+    ///     A list of event hashes (32 bytes each).
+    #[pyo3(text_signature = "(round: int) -> list[bytes]")]
+    fn famous_witnesses(&self, py: Python<'_>, round: u64) -> Vec<Vec<u8>> {
+        self.parent
+            .borrow(py)
+            .inner
+            .graph
+            .famous_witnesses(round)
+            .into_iter()
+            .map(|hash| hash.to_vec())
+            .collect()
+    }
+
+    /// Get the unique famous witnesses for a specific round.
+    ///
+    /// When a peer has multiple famous witnesses (due to forks),
+    /// only the minimum hash is kept per peer.
+    ///
+    /// Returns:
+    ///     A list of event hashes (32 bytes each).
+    #[pyo3(text_signature = "(round: int) -> list[bytes]")]
+    fn unique_famous_witnesses(&self, py: Python<'_>, round: u64) -> Vec<Vec<u8>> {
+        self.parent
+            .borrow(py)
+            .inner
+            .graph
+            .unique_famous_witnesses(round)
+            .into_iter()
+            .map(|hash| hash.to_vec())
+            .collect()
+    }
+
+    /// Get the round in which an event was received (achieved consensus).
+    ///
+    /// An event is received in round r if all unique famous witnesses
+    /// of round r are descendants of the event.
+    ///
+    /// Returns:
+    ///     The round number, or None if consensus has not been reached.
+    #[pyo3(text_signature = "(event_hash: bytes | str) -> int | None")]
+    fn round_received(
+        &self,
+        py: Python<'_>,
+        event_hash: &Bound<'_, PyAny>,
+    ) -> PyResult<Option<u64>> {
+        let hash = extract_hash(event_hash)?;
+        Ok(self.parent.borrow(py).inner.graph.round_received(&hash))
+    }
+
+    /// Get the consensus timestamp for an event.
+    ///
+    /// The consensus timestamp is the median of the timestamps when
+    /// each unique famous witness first saw the event.
+    ///
+    /// Returns:
+    ///     The consensus timestamp, or None if consensus has not been reached.
+    #[pyo3(text_signature = "(event_hash: bytes | str) -> int | None")]
+    fn consensus_timestamp(
+        &self,
+        py: Python<'_>,
+        event_hash: &Bound<'_, PyAny>,
+    ) -> PyResult<Option<u64>> {
+        let hash = extract_hash(event_hash)?;
+        Ok(self
+            .parent
+            .borrow(py)
+            .inner
+            .graph
+            .consensus_timestamp(&hash))
+    }
+
+    /// Compare two events by their consensus ordering.
+    ///
+    /// Events are ordered by: round received, then consensus timestamp,
+    /// then by their hash as a tiebreaker.
+    ///
+    /// Returns:
+    ///     -1 if a < b, 0 if a == b, 1 if a > b, or None if either
+    ///     event has not yet reached consensus.
+    #[pyo3(text_signature = "(a: bytes | str, b: bytes | str) -> int | None")]
+    fn consensus_ordering(
+        &self,
+        py: Python<'_>,
+        a: &Bound<'_, PyAny>,
+        b: &Bound<'_, PyAny>,
+    ) -> PyResult<Option<i8>> {
+        let a_hash = extract_hash(a)?;
+        let b_hash = extract_hash(b)?;
+        Ok(self
+            .parent
+            .borrow(py)
+            .inner
+            .graph
+            .consensus_ordering(a_hash, b_hash)
+            .map(|ordering| match ordering {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            }))
+    }
 }
 
-fn extract_hash(bytes: &[u8]) -> PyResult<[u8; 32]> {
-    if bytes.len() != 32 {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "hash should be a bytes object of length 32",
-        ));
+fn extract_hash(value: &Bound<'_, PyAny>) -> PyResult<[u8; 32]> {
+    // Try to extract as bytes first
+    if let Ok(bytes) = value.extract::<Vec<u8>>() {
+        if bytes.len() != 32 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "hash should be a bytes object of length 32",
+            ));
+        }
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&bytes);
+        return Ok(hash);
     }
-    let mut hash = [0u8; 32];
-    hash.copy_from_slice(bytes);
-    Ok(hash)
+
+    // Try to extract as hex string
+    if let Ok(hex_str) = value.extract::<String>() {
+        // Strip optional "0x" prefix
+        let hex_str = hex_str.strip_prefix("0x").unwrap_or(&hex_str);
+
+        if hex_str.len() != 64 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "hash hex string should be 64 characters (32 bytes)",
+            ));
+        }
+
+        let mut hash = [0u8; 32];
+        for (i, chunk) in hex_str.as_bytes().chunks(2).enumerate() {
+            let hex_byte = std::str::from_utf8(chunk).map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>("invalid hex string")
+            })?;
+            hash[i] = u8::from_str_radix(hex_byte, 16).map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>("invalid hex string")
+            })?;
+        }
+        return Ok(hash);
+    }
+
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "hash should be bytes (32 bytes) or a hex string (64 characters)",
+    ))
 }
 
 #[pymodule]
