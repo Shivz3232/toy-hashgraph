@@ -1,13 +1,69 @@
 use std::{cmp, collections};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     common,
     event::{self, EventTrait},
 };
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Graph {
-    total_peers: usize,
+    pub total_peers: usize,
+    #[serde(with = "hash_map_hex_keys")]
     events: collections::HashMap<common::Hash, event::Event>,
+}
+
+/// Serde module for serializing HashMap<[u8; 32], V> with hex string keys
+mod hash_map_hex_keys {
+    use crate::common;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::HashMap;
+
+    pub fn serialize<S, V>(map: &HashMap<common::Hash, V>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        V: Serialize,
+    {
+        let string_map: HashMap<String, &V> = map
+            .iter()
+            .map(|(k, v)| {
+                let hex: String = k.iter().map(|b| format!("{:02x}", b)).collect();
+                (hex, v)
+            })
+            .collect();
+        string_map.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D, V>(deserializer: D) -> Result<HashMap<common::Hash, V>, D::Error>
+    where
+        D: Deserializer<'de>,
+        V: Deserialize<'de>,
+    {
+        let string_map: HashMap<String, V> = HashMap::deserialize(deserializer)?;
+        let mut result = HashMap::new();
+        for (hex, value) in string_map {
+            if hex.len() != 64 {
+                return Err(serde::de::Error::custom(
+                    "hash hex string must be 64 characters",
+                ));
+            }
+            let mut hash = [0u8; common::HASH_SIZE];
+            let mut chars = hex.chars();
+            for byte in hash.iter_mut() {
+                let a = chars
+                    .next()
+                    .ok_or_else(|| serde::de::Error::custom("unexpected end"))?;
+                let b = chars
+                    .next()
+                    .ok_or_else(|| serde::de::Error::custom("unexpected end"))?;
+                *byte = u8::from_str_radix(&format!("{}{}", a, b), 16)
+                    .map_err(serde::de::Error::custom)?;
+            }
+            result.insert(hash, value);
+        }
+        Ok(result)
+    }
 }
 
 impl Graph {
@@ -23,14 +79,11 @@ impl Graph {
     }
 
     pub fn as_json(&self) -> String {
-        let mut entries: Vec<String> = Vec::new();
+        serde_json::to_string(self).expect("failed to serialize graph to JSON")
+    }
 
-        for (hash, event) in &self.events {
-            let hash_hex = common::bytes_to_hex(hash);
-            entries.push(format!(r#""{}": {}"#, hash_hex, event.as_json()));
-        }
-
-        format!("{{{}}}", entries.join(","))
+    pub fn from_json(json: &str) -> Graph {
+        serde_json::from_str(json).expect("failed to deserialize graph from JSON")
     }
 
     pub fn is_supermajority(&self, count: usize) -> bool {

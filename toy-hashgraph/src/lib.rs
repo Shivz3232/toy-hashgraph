@@ -8,6 +8,7 @@ use ed25519_dalek::{self, ed25519::signature::SignerMut};
 
 use crate::event::EventTrait;
 
+#[derive(Clone)]
 pub struct Hashgraph {
     pub id: u64,
     pub graph: graph::Graph,

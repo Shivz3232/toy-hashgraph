@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use crate::common;
@@ -22,10 +23,10 @@ pub trait EventTrait {
     }
 
     fn timestamp(&self) -> u64;
-
-    fn as_json(&self) -> String;
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Event {
     Initial(Initial),
     Default(Default),
@@ -73,24 +74,6 @@ impl EventTrait for Event {
             Event::Default(default) => default.timestamp(),
         }
     }
-
-    fn as_json(&self) -> String {
-        match self {
-            Event::Initial(initial) => initial.as_json(),
-            Event::Default(default) => default.as_json(),
-        }
-    }
-}
-
-pub struct Initial {
-    pub timestamp: u64,
-    pub peer: u64,
-}
-
-impl Initial {
-    pub fn new(peer: u64, timestamp: u64) -> Initial {
-        Initial { timestamp, peer }
-    }
 }
 
 impl Event {
@@ -105,6 +88,18 @@ impl Event {
         }
 
         events
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Initial {
+    pub timestamp: u64,
+    pub peer: u64,
+}
+
+impl Initial {
+    pub fn new(peer: u64, timestamp: u64) -> Initial {
+        Initial { timestamp, peer }
     }
 }
 
@@ -137,19 +132,16 @@ impl EventTrait for Initial {
     fn timestamp(&self) -> u64 {
         self.timestamp
     }
-
-    fn as_json(&self) -> String {
-        format!(
-            r#"{{"kind":"initial","timestamp":{},"peer":{}}}"#,
-            self.timestamp, self.peer
-        )
-    }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Default {
     pub timestamp: u64,
+    #[serde(with = "hex_bytes")]
     pub transactions: Vec<u8>,
+    #[serde(with = "hex_hash")]
     pub self_parent: common::Hash,
+    #[serde(with = "hex_hash")]
     pub other_parent: common::Hash,
 }
 
@@ -234,14 +226,71 @@ impl EventTrait for Default {
     fn timestamp(&self) -> u64 {
         self.timestamp
     }
+}
 
-    fn as_json(&self) -> String {
-        format!(
-            r#"{{"kind":"default","timestamp":{},"transactions":"{}","self_parent":"{}","other_parent":"{}"}}"#,
-            self.timestamp,
-            common::bytes_to_hex(&self.transactions),
-            common::bytes_to_hex(&self.self_parent),
-            common::bytes_to_hex(&self.other_parent)
-        )
+/// Serde module for serializing Vec<u8> as hex string
+mod hex_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let hex_string: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        serializer.serialize_str(&hex_string)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let hex_string = String::deserialize(deserializer)?;
+        let mut bytes = Vec::with_capacity(hex_string.len() / 2);
+        let mut chars = hex_string.chars();
+        while let (Some(a), Some(b)) = (chars.next(), chars.next()) {
+            let byte =
+                u8::from_str_radix(&format!("{}{}", a, b), 16).map_err(serde::de::Error::custom)?;
+            bytes.push(byte);
+        }
+        Ok(bytes)
+    }
+}
+
+/// Serde module for serializing [u8; 32] as hex string
+mod hex_hash {
+    use crate::common;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(hash: &common::Hash, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let hex_string: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+        serializer.serialize_str(&hex_string)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<common::Hash, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let hex_string = String::deserialize(deserializer)?;
+        if hex_string.len() != 64 {
+            return Err(serde::de::Error::custom(
+                "hash hex string must be 64 characters",
+            ));
+        }
+        let mut hash = [0u8; common::HASH_SIZE];
+        let mut chars = hex_string.chars();
+        for byte in hash.iter_mut() {
+            let a = chars
+                .next()
+                .ok_or_else(|| serde::de::Error::custom("unexpected end"))?;
+            let b = chars
+                .next()
+                .ok_or_else(|| serde::de::Error::custom("unexpected end"))?;
+            *byte =
+                u8::from_str_radix(&format!("{}{}", a, b), 16).map_err(serde::de::Error::custom)?;
+        }
+        Ok(hash)
     }
 }
