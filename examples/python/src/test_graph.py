@@ -555,16 +555,16 @@ def test_hashgraph_as_json(results: TestResults):
     
     # Check that the JSON has the expected structure
     results.check("id" in parsed, "Hashgraph JSON should have 'id'")
-    results.check("transactions" in parsed, "Hashgraph JSON should have 'transactions'")
+    results.check("pending_transactions" in parsed, "Hashgraph JSON should have 'pending_transactions'")
     results.check("graph" in parsed, "Hashgraph JSON should have 'graph'")
     
     # Check id matches
     results.check(parsed["id"] == BOB, f"id should be {BOB}, got {parsed['id']}")
     
-    # Check transactions (should be hex encoded)
-    transactions = parsed["transactions"]
-    results.check(transactions is not None, "transactions should not be None")
-    results.check(len(transactions) > 0, "transactions should not be empty after appending")
+    # Check pending_transactions (should be hex encoded)
+    pending_transactions = parsed["pending_transactions"]
+    results.check(pending_transactions is not None, "pending_transactions should not be None")
+    results.check(len(pending_transactions) > 0, "pending_transactions should not be empty after appending")
     
     # Check that graph has expected structure
     graph_data = parsed["graph"]

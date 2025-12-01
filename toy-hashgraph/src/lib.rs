@@ -124,7 +124,7 @@ impl Hashgraph {
 
     pub fn as_json(&self) -> String {
         format!(
-            r#"{{"id":{},"transactions":"{}","graph":{}}}"#,
+            r#"{{"id":{},"pending_transactions":"{}","graph":{}}}"#,
             self.id,
             common::bytes_to_hex(&self.pending_transactions),
             self.graph.as_json()
