@@ -7,14 +7,29 @@ use crate::{
     event::{self, EventTrait},
 };
 
+#[derive(Clone, Default)]
+pub struct Cache {
+    creator: collections::HashMap<common::Hash, u64>,
+    is_ancestor: collections::HashMap<(common::Hash, common::Hash), bool>,
+    is_self_ancestor: collections::HashMap<(common::Hash, common::Hash), bool>,
+    is_fork: collections::HashMap<(common::Hash, common::Hash), bool>,
+    dishonest_peers: collections::HashSet<u64>,
+    strongly_sees: collections::HashMap<(common::Hash, common::Hash), bool>,
+    round: collections::HashMap<common::Hash, u64>,
+    is_famous: collections::HashMap<common::Hash, bool>,
+    round_received: collections::HashMap<common::Hash, u64>,
+    consensus_timestamp: collections::HashMap<common::Hash, u64>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Graph {
     pub total_peers: usize,
     #[serde(with = "hash_map_hex_keys")]
     events: collections::HashMap<common::Hash, event::Event>,
+    #[serde(skip)]
+    cache: Cache,
 }
 
-/// Serde module for serializing HashMap<[u8; 32], V> with hex string keys
 mod hash_map_hex_keys {
     use crate::common;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -72,10 +87,11 @@ impl Graph {
         let mut events = collections::HashMap::new();
         events.insert(initial_event.hash(), initial_event);
 
-        return Graph {
+        Graph {
             total_peers,
             events,
-        };
+            cache: Cache::default(),
+        }
     }
 
     pub fn as_json(&self) -> String {
@@ -113,134 +129,193 @@ impl Graph {
             .for_each(|event| self.insert_event(event));
     }
 
-    pub fn latest_event(&self, peer: u64) -> Option<&event::Event> {
-        self.events
-            .iter()
-            .filter(|(hash, _)| {
-                self.creator(hash) == peer
-                    && self.events.values().all(|e| match e {
-                        event::Event::Initial(_) => true,
-                        event::Event::Default(d) => d.self_parent != **hash,
-                    })
-            })
-            .map(|(_, event)| event)
-            .next()
+    pub fn latest_event(&mut self, peer: u64) -> Option<common::Hash> {
+        let hashes: Vec<common::Hash> = self.events.keys().cloned().collect();
+
+        for hash in hashes {
+            if self.creator(&hash) == peer {
+                let is_latest = self.events.values().all(|e| match e {
+                    event::Event::Initial(_) => true,
+                    event::Event::Default(d) => d.self_parent != hash,
+                });
+                if is_latest {
+                    return Some(hash);
+                }
+            }
+        }
+        None
     }
 
-    pub fn creator(&self, event_hash: &common::Hash) -> u64 {
-        let mut current_hash = event_hash;
+    pub fn creator(&mut self, event_hash: &common::Hash) -> u64 {
+        if let Some(&cached) = self.cache.creator.get(event_hash) {
+            return cached;
+        }
+
+        let mut current_hash = *event_hash;
         loop {
-            match self.get_event(current_hash) {
-                event::Event::Initial(initial) => return initial.peer,
+            match self.get_event(&current_hash) {
+                event::Event::Initial(initial) => {
+                    let peer = initial.peer;
+                    self.cache.creator.insert(*event_hash, peer);
+                    return peer;
+                }
                 event::Event::Default(default) => {
-                    current_hash = &default.self_parent;
+                    current_hash = default.self_parent;
                 }
             }
         }
     }
 
     /// x ≤ y
-    pub fn is_ancestor(&self, x: &common::Hash, y: &common::Hash) -> bool {
-        if x == y {
+    pub fn is_ancestor(&mut self, x: &common::Hash, y: &common::Hash) -> bool {
+        let key = (*x, *y);
+        if let Some(&cached) = self.cache.is_ancestor.get(&key) {
+            return cached;
+        }
+
+        let result = if x == y {
             true
         } else {
-            match self.get_event(y) {
+            match self.get_event(y).clone() {
                 event::Event::Initial(_) => false,
                 event::Event::Default(default) => {
                     self.is_ancestor(x, &default.self_parent)
                         || self.is_ancestor(x, &default.other_parent)
                 }
             }
-        }
+        };
+
+        self.cache.is_ancestor.insert(key, result);
+        result
     }
 
     /// x < y
-    pub fn is_strict_ancestor(&self, x: &common::Hash, y: &common::Hash) -> bool {
+    pub fn is_strict_ancestor(&mut self, x: &common::Hash, y: &common::Hash) -> bool {
         x != y && self.is_ancestor(x, y)
     }
 
     /// x ⊑ y
-    pub fn is_self_ancestor(&self, x: &common::Hash, y: &common::Hash) -> bool {
-        let mut current_hash = y;
-        while current_hash != x {
-            match self.get_event(current_hash) {
-                event::Event::Initial(_) => return false,
+    pub fn is_self_ancestor(&mut self, x: &common::Hash, y: &common::Hash) -> bool {
+        let key = (*x, *y);
+        if let Some(&cached) = self.cache.is_self_ancestor.get(&key) {
+            return cached;
+        }
+
+        let mut current_hash = *y;
+        while current_hash != *x {
+            match self.get_event(&current_hash).clone() {
+                event::Event::Initial(_) => {
+                    self.cache.is_self_ancestor.insert(key, false);
+                    return false;
+                }
                 event::Event::Default(default) => {
-                    current_hash = &default.self_parent;
+                    current_hash = default.self_parent;
                 }
             }
         }
 
+        self.cache.is_self_ancestor.insert(key, true);
         true
     }
 
     /// x ⊏ y
-    pub fn is_strict_self_ancestor(&self, x: &common::Hash, y: &common::Hash) -> bool {
+    pub fn is_strict_self_ancestor(&mut self, x: &common::Hash, y: &common::Hash) -> bool {
         x != y && self.is_self_ancestor(x, y)
     }
 
-    pub fn is_fork(&self, x: &common::Hash, y: &common::Hash) -> bool {
-        self.creator(x) == self.creator(y)
+    pub fn is_fork(&mut self, x: &common::Hash, y: &common::Hash) -> bool {
+        let key = (*x, *y);
+        if let Some(&cached) = self.cache.is_fork.get(&key) {
+            return cached;
+        }
+
+        let result = self.creator(x) == self.creator(y)
             && !self.is_self_ancestor(x, y)
-            && !self.is_self_ancestor(y, x)
+            && !self.is_self_ancestor(y, x);
+
+        self.cache.is_fork.insert(key, result);
+        self.cache.is_fork.insert((*y, *x), result);
+        result
     }
 
-    pub fn can_see_dishonesty(&self, event_hash: &common::Hash, peer: u64) -> bool {
-        let peer_events = self
-            .events
-            .keys()
-            .filter(|e| self.creator(e) == peer && self.is_ancestor(e, event_hash))
-            .collect::<Vec<_>>();
+    pub fn can_see_dishonesty(&mut self, event_hash: &common::Hash, peer: u64) -> bool {
+        if self.cache.dishonest_peers.contains(&peer) {
+            return true;
+        }
+
+        let all_hashes: Vec<common::Hash> = self.events.keys().cloned().collect();
+        let mut peer_events = Vec::new();
+
+        for hash in all_hashes {
+            if self.creator(&hash) == peer && self.is_ancestor(&hash, event_hash) {
+                peer_events.push(hash);
+            }
+        }
 
         for i in 0..peer_events.len() {
-            for j in 0..peer_events.len() {
-                if i == j {
-                    continue;
-                }
-
-                if self.is_fork(peer_events[i], peer_events[j]) {
+            for j in (i + 1)..peer_events.len() {
+                if self.is_fork(&peer_events[i], &peer_events[j]) {
+                    // Mark this peer as globally dishonest
+                    self.cache.dishonest_peers.insert(peer);
                     return true;
                 }
             }
         }
 
-        return false;
+        false
     }
 
     /// x ⊴ y
-    pub fn sees(&self, x: &common::Hash, y: &common::Hash) -> bool {
-        self.is_ancestor(x, y) && !self.can_see_dishonesty(y, self.creator(x))
+    pub fn sees(&mut self, x: &common::Hash, y: &common::Hash) -> bool {
+        let creator_x = self.creator(x);
+        self.is_ancestor(x, y) && !self.can_see_dishonesty(y, creator_x)
     }
 
     /// x ≪ y
-    pub fn strongly_sees(&self, x: &common::Hash, y: &common::Hash) -> bool {
-        let events = self
-            .events
-            .keys()
-            .filter(|z| self.is_ancestor(z, y) && self.sees(x, z))
-            .map(|z| self.creator(z))
-            .collect::<collections::HashSet<_>>();
+    pub fn strongly_sees(&mut self, x: &common::Hash, y: &common::Hash) -> bool {
+        let key = (*x, *y);
+        if let Some(&cached) = self.cache.strongly_sees.get(&key) {
+            return cached;
+        }
 
-        return self.is_supermajority(events.len());
+        let all_hashes: Vec<common::Hash> = self.events.keys().cloned().collect();
+        let mut peers = collections::HashSet::new();
+
+        for z in all_hashes {
+            if self.is_ancestor(&z, y) && self.sees(x, &z) {
+                let creator = self.creator(&z);
+                peers.insert(creator);
+            }
+        }
+
+        let result = self.is_supermajority(peers.len());
+        self.cache.strongly_sees.insert(key, result);
+        result
     }
 
-    pub fn round(&self, event_hash: &common::Hash) -> u64 {
-        let event = self.get_event(event_hash);
+    pub fn round(&mut self, event_hash: &common::Hash) -> u64 {
+        if let Some(&cached) = self.cache.round.get(event_hash) {
+            return cached;
+        }
 
-        match event {
+        let event = self.get_event(event_hash).clone();
+
+        let result = match event {
             event::Event::Initial(_) => 0,
             event::Event::Default(default) => {
-                let i = u64::max(
-                    self.round(&default.self_parent),
-                    self.round(&default.other_parent),
-                );
+                let parent_round_self = self.round(&default.self_parent);
+                let parent_round_other = self.round(&default.other_parent);
+                let i = u64::max(parent_round_self, parent_round_other);
 
-                let base_round_event_peers = self
-                    .events
-                    .keys()
-                    .filter(|e| self.strongly_sees(e, event_hash) && self.round(e) == i)
-                    .map(|e| self.creator(e))
-                    .collect::<collections::HashSet<_>>();
+                let all_hashes: Vec<common::Hash> = self.events.keys().cloned().collect();
+                let mut base_round_event_peers = collections::HashSet::new();
+
+                for e in all_hashes {
+                    if self.strongly_sees(&e, event_hash) && self.round(&e) == i {
+                        let creator = self.creator(&e);
+                        base_round_event_peers.insert(creator);
+                    }
+                }
 
                 if self.is_supermajority(base_round_event_peers.len()) {
                     i + 1
@@ -248,54 +323,73 @@ impl Graph {
                     i
                 }
             }
+        };
+
+        self.cache.round.insert(*event_hash, result);
+        result
+    }
+
+    pub fn witnesses(&mut self, round: u64) -> Vec<common::Hash> {
+        let all_hashes: Vec<common::Hash> = self.events.keys().cloned().collect();
+        let mut result = Vec::new();
+
+        for e in all_hashes {
+            if self.round(&e) == round {
+                let is_witness = match self.get_event(&e).clone() {
+                    event::Event::Initial(_) => round == 0,
+                    event::Event::Default(d) => self.round(&d.self_parent) != round,
+                };
+                if is_witness {
+                    result.push(e);
+                }
+            }
         }
+
+        result
     }
 
-    pub fn witnesses(&self, round: u64) -> Vec<common::Hash> {
-        self.events
-            .keys()
-            .filter(|e| {
-                self.round(e) == round
-                    && match self.get_event(e) {
-                        event::Event::Initial(_) => round == 0,
-                        event::Event::Default(d) => self.round(&d.self_parent) != round,
-                    }
-            })
-            .map(|e| e.clone())
-            .collect::<Vec<_>>()
-    }
+    fn is_famous(&mut self, candidate: &common::Hash) -> bool {
+        if let Some(&cached) = self.cache.is_famous.get(candidate) {
+            return cached;
+        }
 
-    fn is_famous(&self, candidate: &common::Hash) -> bool {
-        let mut round = self.round(&candidate) + 1;
+        let candidate_round = self.round(candidate);
+        let mut round = candidate_round + 1;
         let mut previous_voters = self.witnesses(round);
-        let mut previous_votes = previous_voters
+        let mut previous_votes: Vec<bool> = previous_voters
             .iter()
-            .map(|voter| self.is_strict_ancestor(&candidate, voter))
-            .collect::<Vec<_>>();
+            .map(|voter| self.is_strict_ancestor(candidate, voter))
+            .collect();
 
         loop {
             round += 1;
             let voters = self.witnesses(round);
-            if voters.len() == 0 {
-                return false; // Should lead to coin round but I'm not implementing that
+            if voters.is_empty() {
+                return false;
             }
             let mut votes = Vec::new();
 
             for voter in voters.iter() {
-                let observed_votes = previous_voters
-                    .iter()
-                    .zip(previous_votes.iter())
-                    .filter(|(previous_voter, _)| self.strongly_sees(previous_voter, voter))
-                    .map(|(_, pv)| pv);
+                let mut yes_count = 0;
+                let mut no_count = 0;
 
-                let yes_count = observed_votes.clone().filter(|v| **v).count();
-                let no_count = observed_votes.clone().filter(|v| !*v).count();
+                for (previous_voter, &pv) in previous_voters.iter().zip(previous_votes.iter()) {
+                    if self.strongly_sees(previous_voter, voter) {
+                        if pv {
+                            yes_count += 1;
+                        } else {
+                            no_count += 1;
+                        }
+                    }
+                }
 
                 if self.is_supermajority(yes_count) {
+                    self.cache.is_famous.insert(*candidate, true);
                     return true;
                 }
 
                 if self.is_supermajority(no_count) {
+                    self.cache.is_famous.insert(*candidate, false);
                     return false;
                 }
 
@@ -307,25 +401,24 @@ impl Graph {
         }
     }
 
-    pub fn famous_witnesses(&self, round: u64) -> Vec<common::Hash> {
-        self.witnesses(round)
-            .into_iter()
-            .filter(|w| self.is_famous(w))
-            .collect::<Vec<_>>()
+    pub fn famous_witnesses(&mut self, round: u64) -> Vec<common::Hash> {
+        let witnesses = self.witnesses(round);
+        let mut result = Vec::new();
+        for w in witnesses {
+            if self.is_famous(&w) {
+                result.push(w);
+            }
+        }
+        result
     }
 
-    pub fn unique_famous_witnesses(&self, round: u64) -> Vec<common::Hash> {
-        let mut map = collections::HashMap::new();
-        for famous_witness in self.famous_witnesses(round) {
+    pub fn unique_famous_witnesses(&mut self, round: u64) -> Vec<common::Hash> {
+        let famous = self.famous_witnesses(round);
+        let mut map: collections::HashMap<u64, Vec<common::Hash>> = collections::HashMap::new();
+
+        for famous_witness in famous {
             let peer = self.creator(&famous_witness);
-
-            if !map.contains_key(&peer) {
-                map.insert(peer, Vec::new());
-            }
-
-            map.get_mut(&peer)
-                .expect("i just inserted it")
-                .push(famous_witness);
+            map.entry(peer).or_default().push(famous_witness);
         }
 
         map.into_values()
@@ -338,67 +431,87 @@ impl Graph {
             .collect::<Vec<_>>()
     }
 
-    pub fn round_received(&self, event_hash: &common::Hash) -> Option<u64> {
+    pub fn round_received(&mut self, event_hash: &common::Hash) -> Option<u64> {
+        if let Some(&cached) = self.cache.round_received.get(event_hash) {
+            return Some(cached);
+        }
+
         let mut round = self.round(event_hash);
 
         loop {
             let unique_famous_witnesses = self.unique_famous_witnesses(round);
 
-            if unique_famous_witnesses.len() == 0 {
+            if unique_famous_witnesses.is_empty() {
                 return None;
             }
 
-            if unique_famous_witnesses
-                .iter()
-                .all(|famous_witness| self.is_ancestor(event_hash, famous_witness))
-            {
+            let mut all_are_descendants = true;
+            for famous_witness in &unique_famous_witnesses {
+                if !self.is_ancestor(event_hash, famous_witness) {
+                    all_are_descendants = false;
+                    break;
+                }
+            }
+
+            if all_are_descendants {
+                self.cache.round_received.insert(*event_hash, round);
                 return Some(round);
             }
-            round += 1
+            round += 1;
         }
     }
 
-    pub fn consensus_timestamp(&self, event_hash: &common::Hash) -> Option<u64> {
+    pub fn consensus_timestamp(&mut self, event_hash: &common::Hash) -> Option<u64> {
+        if let Some(&cached) = self.cache.consensus_timestamp.get(event_hash) {
+            return Some(cached);
+        }
+
         let round = self.round_received(event_hash)?;
+        let unique_famous = self.unique_famous_witnesses(round);
 
-        let mut timestamps = self
-            .unique_famous_witnesses(round)
-            .into_iter()
-            .map(|witness| {
-                let mut current = witness;
-                let mut last_with_x = None;
+        let mut timestamps = Vec::new();
+        for witness in unique_famous {
+            let mut current = witness;
+            let mut last_with_x: Option<common::Hash> = None;
 
-                loop {
-                    if self.is_ancestor(event_hash, &current) {
-                        last_with_x = Some(current);
+            loop {
+                if self.is_ancestor(event_hash, &current) {
+                    last_with_x = Some(current);
+                }
+
+                let event = self.get_event(&current).clone();
+                match event {
+                    event::Event::Initial(_) => {
+                        let z = last_with_x.unwrap_or(current);
+                        timestamps.push(self.get_event(&z).timestamp());
+                        break;
                     }
-
-                    match self.get_event(&current) {
-                        event::Event::Initial(_) => {
-                            let z = last_with_x.unwrap_or(current);
-                            return self.get_event(&z).timestamp();
+                    event::Event::Default(ev) => {
+                        if !self.is_ancestor(event_hash, &current) && last_with_x.is_some() {
+                            let z = last_with_x.unwrap();
+                            timestamps.push(self.get_event(&z).timestamp());
+                            break;
                         }
-                        event::Event::Default(ev) => {
-                            if !self.is_ancestor(event_hash, &current) && last_with_x.is_some() {
-                                let z = last_with_x.unwrap();
-                                return self.get_event(&z).timestamp();
-                            }
-                            current = ev.self_parent;
-                        }
+                        current = ev.self_parent;
                     }
                 }
-            })
-            .collect::<Vec<_>>();
+            }
+        }
         timestamps.sort();
 
-        Some(
-            *timestamps
-                .get((timestamps.len() - 1) / 2)
-                .expect("there should at least be one candidate timestamp"),
-        )
+        let result = *timestamps
+            .get((timestamps.len() - 1) / 2)
+            .expect("there should at least be one candidate timestamp");
+
+        self.cache.consensus_timestamp.insert(*event_hash, result);
+        Some(result)
     }
 
-    pub fn consensus_ordering(&self, a: common::Hash, b: common::Hash) -> Option<cmp::Ordering> {
+    pub fn consensus_ordering(
+        &mut self,
+        a: common::Hash,
+        b: common::Hash,
+    ) -> Option<cmp::Ordering> {
         let a_round = self.round_received(&a)?;
         let b_round = self.round_received(&b)?;
         let a_time = self.consensus_timestamp(&a)?;
@@ -524,7 +637,7 @@ mod tests {
 
     #[test]
     fn creators_and_latest_events_match_figure1() {
-        let (graph, labels) = build_figure1_graph();
+        let (mut graph, labels) = build_figure1_graph();
 
         // Creator for each labeled event
         let expected_creators = [
@@ -548,10 +661,10 @@ mod tests {
         }
 
         // Latest events by peer correspond to the top of each column
-        let latest_alice = graph.latest_event(ALICE).unwrap().hash();
-        let latest_bob = graph.latest_event(BOB).unwrap().hash();
-        let latest_cathy = graph.latest_event(CATHY).unwrap().hash();
-        let latest_dave = graph.latest_event(DAVE).unwrap().hash();
+        let latest_alice = graph.latest_event(ALICE).unwrap();
+        let latest_bob = graph.latest_event(BOB).unwrap();
+        let latest_cathy = graph.latest_event(CATHY).unwrap();
+        let latest_dave = graph.latest_event(DAVE).unwrap();
 
         assert_eq!(latest_alice, *labels.get("A2").unwrap());
         assert_eq!(latest_bob, *labels.get("B5").unwrap());
@@ -561,7 +674,7 @@ mod tests {
 
     #[test]
     fn ancestor_and_self_ancestor_relations_follow_figure1() {
-        let (graph, labels) = build_figure1_graph();
+        let (mut graph, labels) = build_figure1_graph();
 
         let a1 = labels["A1"];
         let a2 = labels["A2"];
@@ -599,7 +712,7 @@ mod tests {
 
     #[test]
     fn no_forks_and_no_seen_dishonesty_in_figure1_graph() {
-        let (graph, labels) = build_figure1_graph();
+        let (mut graph, labels) = build_figure1_graph();
 
         // In the example all peers are honest, so there should be no forks.
         let same_peer_pairs = [
@@ -623,7 +736,8 @@ mod tests {
 
         // Because there are no forks, no event should be able to see dishonesty.
         let peers = [ALICE, BOB, CATHY, DAVE];
-        for (label, hash) in labels.iter() {
+        let label_list: Vec<_> = labels.iter().collect();
+        for (label, hash) in label_list {
             for peer in peers {
                 assert!(
                     !graph.can_see_dishonesty(hash, peer),
@@ -637,7 +751,7 @@ mod tests {
 
     #[test]
     fn sees_and_strongly_sees_match_paper_examples() {
-        let (graph, labels) = build_figure1_graph();
+        let (mut graph, labels) = build_figure1_graph();
 
         let a1 = labels["A1"];
         let b1 = labels["B1"];
@@ -677,7 +791,7 @@ mod tests {
 
     #[test]
     fn round_zero_for_initial_events() {
-        let (graph, labels) = build_figure1_graph();
+        let (mut graph, labels) = build_figure1_graph();
 
         // The paper states that all initial events are in round 0.
         // We only test initial events here to avoid relying on any
@@ -691,7 +805,7 @@ mod tests {
 
     #[test]
     fn rounds_for_all_figure1_events_follow_paper_description() {
-        let (graph, labels) = build_figure1_graph();
+        let (mut graph, labels) = build_figure1_graph();
 
         // From the paper's description of Figure 1:
         // - All initial events (A1, B1, C1, D1) are in round 0.
@@ -724,7 +838,7 @@ mod tests {
 
     #[test]
     fn witnesses_correspond_to_first_events_in_each_round() {
-        let (graph, labels) = build_figure1_graph();
+        let (mut graph, labels) = build_figure1_graph();
 
         // Round 0 witnesses are the initial events A1, B1, C1, D1.
         let mut expected_round0 = vec![labels["A1"], labels["B1"], labels["C1"], labels["D1"]];

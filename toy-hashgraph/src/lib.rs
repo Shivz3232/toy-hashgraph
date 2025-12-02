@@ -6,8 +6,6 @@ use std::collections::HashMap;
 
 use ed25519_dalek::{self, ed25519::signature::SignerMut};
 
-use crate::event::EventTrait;
-
 #[derive(Clone)]
 pub struct Hashgraph {
     pub id: u64,
@@ -117,8 +115,8 @@ impl Hashgraph {
             .insert_event(event::Event::Default(event::Default::new(
                 timestamp,
                 transactions,
-                self_parent.hash(),
-                other_parent.hash(),
+                self_parent,
+                other_parent,
             )));
     }
 

@@ -1,7 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
-use toy_hashgraph::event::EventTrait;
 
 /// A Hashgraph instance representing a single peer's view of the distributed ledger.
 ///
@@ -169,11 +168,11 @@ impl Hashgraph {
     }
 }
 
-/// A read-only interface for querying the graph structure of a Hashgraph.
+/// An interface for querying the graph structure of a Hashgraph.
 ///
 /// This class provides methods to inspect events, check ancestry relationships,
-/// compute consensus rounds, and identify witnesses. All methods are non-mutating
-/// and provide a view into the current state of the graph.
+/// compute consensus rounds, and identify witnesses. Methods that perform
+/// computations will cache their results for improved performance.
 ///
 /// Obtain a GraphQuerier via the `Hashgraph.graph` property, or construct one
 /// from JSON using `GraphQuerier.from_json()`.
@@ -246,10 +245,8 @@ impl GraphQuerier {
     /// Returns:
     ///     The event hash (32 bytes), or None if no events exist for this peer.
     #[pyo3(text_signature = "(peer: int) -> bytes | None")]
-    fn latest_event(&self, peer: u64) -> Option<Vec<u8>> {
-        self.inner
-            .latest_event(peer)
-            .map(|event| event.hash().to_vec())
+    fn latest_event(&mut self, peer: u64) -> Option<Vec<u8>> {
+        self.inner.latest_event(peer).map(|hash| hash.to_vec())
     }
 
     /// Get an event by its hash.
@@ -276,7 +273,7 @@ impl GraphQuerier {
     /// Returns:
     ///     The peer ID of the event's creator.
     #[pyo3(text_signature = "(event_hash: bytes | str) -> int")]
-    fn creator(&self, event_hash: &Bound<'_, PyAny>) -> PyResult<u64> {
+    fn creator(&mut self, event_hash: &Bound<'_, PyAny>) -> PyResult<u64> {
         let hash = extract_hash(event_hash)?;
         Ok(self.inner.creator(&hash))
     }
@@ -293,7 +290,7 @@ impl GraphQuerier {
     /// Returns:
     ///     True if x is an ancestor of y (including x == y).
     #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
-    fn is_ancestor(&self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
+    fn is_ancestor(&mut self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self.inner.is_ancestor(&x_hash, &y_hash))
@@ -303,7 +300,7 @@ impl GraphQuerier {
     ///
     /// Same as is_ancestor but excludes the case where x == y.
     #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
-    fn is_strict_ancestor(&self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
+    fn is_strict_ancestor(&mut self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self.inner.is_strict_ancestor(&x_hash, &y_hash))
@@ -314,7 +311,7 @@ impl GraphQuerier {
     /// A self-ancestor relationship follows only the self-parent chain,
     /// meaning both events were created by the same peer.
     #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
-    fn is_self_ancestor(&self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
+    fn is_self_ancestor(&mut self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self.inner.is_self_ancestor(&x_hash, &y_hash))
@@ -325,7 +322,7 @@ impl GraphQuerier {
     /// Same as is_self_ancestor but excludes the case where x == y.
     #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
     fn is_strict_self_ancestor(
-        &self,
+        &mut self,
         x: &Bound<'_, PyAny>,
         y: &Bound<'_, PyAny>,
     ) -> PyResult<bool> {
@@ -339,7 +336,7 @@ impl GraphQuerier {
     /// A fork occurs when two events from the same creator are not
     /// in a self-ancestor relationship with each other.
     #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
-    fn is_fork(&self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
+    fn is_fork(&mut self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self.inner.is_fork(&x_hash, &y_hash))
@@ -350,7 +347,7 @@ impl GraphQuerier {
     /// An event can see dishonesty if it has visibility to a fork
     /// created by the specified peer.
     #[pyo3(text_signature = "(event_hash: bytes | str, peer: int) -> bool")]
-    fn can_see_dishonesty(&self, event_hash: &Bound<'_, PyAny>, peer: u64) -> PyResult<bool> {
+    fn can_see_dishonesty(&mut self, event_hash: &Bound<'_, PyAny>, peer: u64) -> PyResult<bool> {
         let hash = extract_hash(event_hash)?;
         Ok(self.inner.can_see_dishonesty(&hash, peer))
     }
@@ -360,7 +357,7 @@ impl GraphQuerier {
     /// Event y sees event x if x is an ancestor of y and y cannot
     /// see any dishonesty by the creator of x.
     #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
-    fn sees(&self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
+    fn sees(&mut self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self.inner.sees(&x_hash, &y_hash))
@@ -371,7 +368,7 @@ impl GraphQuerier {
     /// Event y strongly sees event x if there is a supermajority of
     /// peers whose events are ancestors of y and see x.
     #[pyo3(text_signature = "(x: bytes | str, y: bytes | str) -> bool")]
-    fn strongly_sees(&self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
+    fn strongly_sees(&mut self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<bool> {
         let x_hash = extract_hash(x)?;
         let y_hash = extract_hash(y)?;
         Ok(self.inner.strongly_sees(&x_hash, &y_hash))
@@ -382,7 +379,7 @@ impl GraphQuerier {
     /// Initial events are in round 0. Other events advance to round r+1
     /// if they can strongly see a supermajority of round r witnesses.
     #[pyo3(text_signature = "(event_hash: bytes | str) -> int")]
-    fn round(&self, event_hash: &Bound<'_, PyAny>) -> PyResult<u64> {
+    fn round(&mut self, event_hash: &Bound<'_, PyAny>) -> PyResult<u64> {
         let hash = extract_hash(event_hash)?;
         Ok(self.inner.round(&hash))
     }
@@ -395,7 +392,7 @@ impl GraphQuerier {
     /// Returns:
     ///     A list of event hashes (32 bytes each).
     #[pyo3(text_signature = "(round: int) -> list[bytes]")]
-    fn witnesses(&self, round: u64) -> Vec<Vec<u8>> {
+    fn witnesses(&mut self, round: u64) -> Vec<Vec<u8>> {
         self.inner
             .witnesses(round)
             .into_iter()
@@ -411,7 +408,7 @@ impl GraphQuerier {
     /// Returns:
     ///     A list of event hashes (32 bytes each).
     #[pyo3(text_signature = "(round: int) -> list[bytes]")]
-    fn famous_witnesses(&self, round: u64) -> Vec<Vec<u8>> {
+    fn famous_witnesses(&mut self, round: u64) -> Vec<Vec<u8>> {
         self.inner
             .famous_witnesses(round)
             .into_iter()
@@ -427,7 +424,7 @@ impl GraphQuerier {
     /// Returns:
     ///     A list of event hashes (32 bytes each).
     #[pyo3(text_signature = "(round: int) -> list[bytes]")]
-    fn unique_famous_witnesses(&self, round: u64) -> Vec<Vec<u8>> {
+    fn unique_famous_witnesses(&mut self, round: u64) -> Vec<Vec<u8>> {
         self.inner
             .unique_famous_witnesses(round)
             .into_iter()
@@ -443,7 +440,7 @@ impl GraphQuerier {
     /// Returns:
     ///     The round number, or None if consensus has not been reached.
     #[pyo3(text_signature = "(event_hash: bytes | str) -> int | None")]
-    fn round_received(&self, event_hash: &Bound<'_, PyAny>) -> PyResult<Option<u64>> {
+    fn round_received(&mut self, event_hash: &Bound<'_, PyAny>) -> PyResult<Option<u64>> {
         let hash = extract_hash(event_hash)?;
         Ok(self.inner.round_received(&hash))
     }
@@ -456,7 +453,7 @@ impl GraphQuerier {
     /// Returns:
     ///     The consensus timestamp, or None if consensus has not been reached.
     #[pyo3(text_signature = "(event_hash: bytes | str) -> int | None")]
-    fn consensus_timestamp(&self, event_hash: &Bound<'_, PyAny>) -> PyResult<Option<u64>> {
+    fn consensus_timestamp(&mut self, event_hash: &Bound<'_, PyAny>) -> PyResult<Option<u64>> {
         let hash = extract_hash(event_hash)?;
         Ok(self.inner.consensus_timestamp(&hash))
     }
@@ -471,7 +468,7 @@ impl GraphQuerier {
     ///     event has not yet reached consensus.
     #[pyo3(text_signature = "(a: bytes | str, b: bytes | str) -> int | None")]
     fn consensus_ordering(
-        &self,
+        &mut self,
         a: &Bound<'_, PyAny>,
         b: &Bound<'_, PyAny>,
     ) -> PyResult<Option<i8>> {
